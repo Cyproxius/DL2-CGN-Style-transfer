@@ -6,37 +6,14 @@ from torchvision import transforms
 import time
 import cv2
 import numpy as np
+import csv
+import itertools
 
 STYLE_TRANSFORM_PATH = "transforms/wave.pth"
 PRESERVE_COLOR = False
 
-def stylize():
-    # Device
-    device = ("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load Transformer Network
-    net = transformer.TransformerNetwork()
-    net.load_state_dict(torch.load(STYLE_TRANSFORM_PATH))
-    net = net.to(device)
-
-    with torch.no_grad():
-        while(1):
-            torch.cuda.empty_cache()
-            print("Stylize Image~ Press Ctrl+C and Enter to close the program")
-            content_image_path = input("Enter the image path: ")
-            content_image = utils.load_image(content_image_path)
-            starttime = time.time()
-            content_tensor = utils.itot(content_image).to(device)
-            generated_tensor = net(content_tensor)
-            generated_image = utils.ttoi(generated_tensor.detach())
-            if (PRESERVE_COLOR):
-                generated_image = utils.transfer_color(content_image, generated_image)
-            print("Transfer Time: {}".format(time.time() - starttime))
-            utils.show(generated_image)
-            utils.saveimg(generated_image, "helloworld.jpg")
-
-
-def stylize_folder_single(style_path, content_folder, save_folder, ratio):
+def stylize_imagenet(style_path, content_folder, save_folder):
     """
     Reads frames/pictures as follows:
 
@@ -64,14 +41,9 @@ def stylize_folder_single(style_path, content_folder, save_folder, ratio):
 
     # Stylize every frame
     images = np.array([img for img in os.listdir(content_folder)])
-    
-    num_imgs = len(images)
-    # Pick images to transform on an evenly spaced interval
-    idx_to_conv = np.arange(0, num_imgs, 1//ratio, dtype=int)
-    imgs_selection = images[idx_to_conv]
 
     with torch.no_grad():
-        for i, image_name in enumerate(imgs_selection):
+        for image_name in images:
             t = time.time()
             # Free-up unneeded cuda memory
             torch.cuda.empty_cache()
@@ -85,22 +57,19 @@ def stylize_folder_single(style_path, content_folder, save_folder, ratio):
             if (PRESERVE_COLOR):
                 generated_image = utils.transfer_color(content_image, generated_image)
             # Save image
-            utils.saveimg(generated_image, save_folder + image_name.split('.')[0] + style_path.split('/')[-1].split('.')[0] + '.JPEG')
-            print(f'Style transfered one image in {time.time()-t} seconds')
-            if num_imgs > 10 and not i%(num_imgs//10):
-                print(f'Generation at {i/num_imgs*10}%')
+            out_img_name = image_name.split('.')[0] + "_style_" + style_path.split('/')[-1].split('.')[0] + '.JPEG'
+            utils.saveimg(generated_image, save_folder + out_img_name)
 
-def stylize_folder(style_path, folder_containing_the_content_folder, save_folder, batch_size=1):
-    """Stylizes images in a folder by batch
-    If the images  are of different dimensions, use transform.resize() or use a batch size of 1
-    IMPORTANT: Put content_folder inside another folder folder_containing_the_content_folder
 
-    folder_containing_the_content_folder
-        content_folder
-            pic1.ext
-            pic2.ext
-            pic3.ext
-            ...
+def stylize_cgn(style_path, content_folder, save_folder):
+    """
+    Reads frames/pictures as follows:
+
+    content_folder
+        pic1.ext
+        pic2.ext
+        pic3.ext
+        ...
 
     and saves as the styled images in save_folder as follow:
 
@@ -113,32 +82,61 @@ def stylize_folder(style_path, folder_containing_the_content_folder, save_folder
     # Device
     device = ("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Image loader
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.mul(255))
-    ])
-    image_dataset = utils.ImageFolderWithPaths(folder_containing_the_content_folder, transform=transform)
-    image_loader = torch.utils.data.DataLoader(image_dataset, batch_size=batch_size)
-
     # Load Transformer Network
     net = transformer.TransformerNetwork()
     net.load_state_dict(torch.load(style_path))
     net = net.to(device)
 
-    # Stylize batches of images
+    out_labels_fn = '/'.join(save_folder.split('/')[:-2])+'/labels.csv'
+
+    if os.path.isfile(out_labels_fn):
+        labels = out_labels_fn
+    else:
+        labels = '/'.join(content_folder.split('/')[:-2])+'/labels.csv'
+    
+    # Read in the raw labels csv file
+    with open(labels) as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        rows = [row for row in csv_reader]
+    header, label_rows = rows[0], rows[1:]
+
+    # Get the 'base name' of all labels (this includes duplicates)
+    label_rows_unique = [[row[0].split("_style_")[0], *row[1:]] for row in label_rows]
+
+    # Remove the duplicates
+    label_rows_unique.sort()
+    label_rows_unique = list(label_rows_unique for label_rows_unique,_ in itertools.groupby(label_rows_unique))
+
+    # Create the new labels for the images with the current style
+    new_labels = [[row[0] + "_style_" + style_path.split('/')[-1].split('.')[0], *row[1:]] for row in label_rows_unique]
+    all_new_labels = label_rows + new_labels
+    all_new_labels.sort()
+
+    # Combine the new labels with the old labels
+    all_new_rows = header + all_new_labels
+
+    # Overwrite the old labels file
+    with open(out_labels_fn, 'w', newline='') as f:
+        writer = csv.writer(f, delimiter=',')
+        writer.writerows(all_new_rows)
+
+    images = np.array([img for img in os.listdir(content_folder)])
+
     with torch.no_grad():
-        for content_batch, _, path in image_loader:
+        for image_name in images:
+            t = time.time()
             # Free-up unneeded cuda memory
             torch.cuda.empty_cache()
+            # Load content image
+            content_image = utils.load_image(content_folder + image_name)
+            content_tensor = utils.itot(content_image).to(device)
 
             # Generate image
-            generated_tensor = net(content_batch.to(device)).detach()
-
-            # Save images
-            for i in range(len(path)):
-                generated_image = utils.ttoi(generated_tensor[i])
-                if (PRESERVE_COLOR):
-                    generated_image = utils.transfer_color(content_image, generated_image)
-                image_name = os.path.basename(path[i])
-                utils.saveimg(generated_image, save_folder + image_name)
+            generated_tensor = net(content_tensor)
+            generated_image = utils.ttoi(generated_tensor.detach())
+            if (PRESERVE_COLOR):
+                generated_image = utils.transfer_color(content_image, generated_image)
+            # Save image
+            label_img_name = image_name.split('.')[0].split("_x_gen")[0]
+            out_img_name = label_img_name + "_style_" + style_path.split('/')[-1].split('.')[0] + '_x_gen.JPEG'
+            utils.saveimg(generated_image, save_folder + out_img_name)
