@@ -1,0 +1,23 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_shared_course
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=imagenet_generate
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=3
+#SBATCH --time=3:30:00
+#SBATCH --mem=32000M
+#SBATCH --output=imagenet_generate_%A.out
+
+
+module purge
+module load 2021
+module load Anaconda3/2021.05
+
+# Your job starts in the directory where you call sbatch
+cd $HOME/fnst
+# Activate your environment
+source activate cgn-gpu
+# Run your code
+
+python fnst_data.py --content_folder ../datasets/IMmini/ --destination_folder ../datasets/SIMmini/ --ratio 0.01 --style starry
