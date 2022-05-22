@@ -12,7 +12,7 @@ import pandas as pd
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torch.utils.data.distributed import Sampler
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
@@ -101,10 +101,58 @@ class ImagenetVanilla(Dataset) :
 
         # Transforms
         if train:
-            ims_path = join(root, 'imagenet', 'train')
+            ims_path = join(root, 'imagenet_mini', 'train')
+            print("ims_path for ImagenetVanilla:",ims_path)
             t_list = [transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip()]
         else:
-            ims_path = join(root, 'imagenet', 'val')
+            ims_path = join(root, 'imagenet_mini', 'val')
+            t_list = [transforms.Resize(256), transforms.CenterCrop(224)]
+
+        t_list += [transforms.ToTensor(), normalize]
+        self.T_ims = transforms.Compose(t_list)
+
+        self.im_paths, self.labels = self.get_data(ims_path)
+
+    def set_len(self, n):
+        assert n < len(self), "Ratio is too large, not enough CF data available"
+        self.im_paths = self.im_paths[:n]
+        self.labels = self.labels[:n]
+
+    @staticmethod
+    def get_data(p):
+        ims, labels = [], []
+        subdirs = sorted(glob(p + '/*'))
+        for i, sub in enumerate(subdirs):
+            im = sorted(glob(sub + '/*'))
+            l = np.ones(len(im))*i
+            ims.append(im), labels.append(l)
+        return np.concatenate(ims), np.concatenate(labels)
+
+    def __getitem__(self, idx):
+        ims = Image.open(self.im_paths[idx]).convert('RGB')
+        labels = self.labels[idx]
+        return {
+            'ims': self.T_ims(ims),
+            'labels': transform_labels(labels),
+        }
+
+    def __len__(self):
+        return len(self.im_paths)
+
+class Imagenet_style(Dataset) :
+
+    def __init__(self, train=True):
+        super(Imagenet_style, self).__init__()
+        root = join('.', 'imagenet', 'data')
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        # Transforms
+        if train:
+            ims_path = join(root, 'imagenet_style', 'train')
+            t_list = [transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip()]
+        else:
+            ims_path = join(root, 'imagenet_style', 'val')
             t_list = [transforms.Resize(256), transforms.CenterCrop(224)]
 
         t_list += [transforms.ToTensor(), normalize]
@@ -150,9 +198,9 @@ class ImagenetCounterfactual(Dataset):
           "RUN_NAME_0000000_textures.jpg"
     '''
 
-    def __init__(self, ims_path, train=True, n_data=None, mode='silhouette'):
+    def __init__(self, ims_path, train=True, n_data=None, mode='x_gen'):
         super(ImagenetCounterfactual, self).__init__()
-        print(f"Loading counterfactual data from {ims_path}")
+        print(f"Loading counterfactual data from {ims_path} for Train: "+ str(train)  )
         self.full_df = self.get_data(ims_path, train, mode)
 
         # get the actual dataframe that we use for sampling the dataset
@@ -175,21 +223,27 @@ class ImagenetCounterfactual(Dataset):
                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])]
         self.T_ims = transforms.Compose(t_list)
-
+        
     def resample(self):
         ''' resample the current data set from the full dataset'''
         self.df = self.full_df.sample(self.n_data)
-
+        
     @staticmethod
     def get_data(p, train , mode):
         subdirs = glob(p + '/train*') if train else glob(p + '/val*')
-
         dfs = []
-        for sub in subdirs:
-            df = pd.read_csv(join(sub, 'labels.csv'), index_col=0)
-            df['abs_path'] = sub + '/ims/' + df['im_name'] + f"_{mode}.jpg"
-            dfs.append(df)
-
+        if mode =="x_gen":
+            for sub in subdirs:
+                df = pd.read_csv(join(sub, 'labels.csv'), index_col=0)
+                df['abs_path'] = sub + '/ims/' + df['im_name'] + f"_{mode}.jpg"
+                dfs.append(df)
+        elif mode =="style":
+            for sub in subdirs:
+                for a_style in ["style_lazy_x_gen","style_mosaic_x_gen","style_starry_x_gen","style_wave_x_gen"]:
+                    df = pd.read_csv(join(sub, 'labels.csv'), index_col=0)
+                    df['abs_path'] = sub + '/ims/' + df['im_name'] + f"_{a_style}.JPEG"
+                    dfs.append(df)
+        pd.concat(dfs).to_csv(mode+".csv",index=False)
         return pd.concat(dfs)
 
     def __getitem__(self, idx):
@@ -212,6 +266,7 @@ class ImagenetCounterfactual(Dataset):
     def __len__(self):
         return len(self.df)
 
+        
 class CueConflict(Dataset):
     def __init__(self, t_list=[transforms.Resize(256),
                                transforms.CenterCrop(224),
@@ -289,11 +344,24 @@ class Imagenet9(object):
         return test_loader
 
 # dataloaders
-
-def get_imagenet_dls(distributed, batch_size, workers):
+def get_imagenet_dls(style_training, imagenet_training, distributed, batch_size, workers):
     # dataset
     train_dataset = ImagenetVanilla(train=True)
     val_dataset = ImagenetVanilla(train=False)
+    
+    train_dataset_style = Imagenet_style(train=True)
+    val_dataset_style = Imagenet_style(train=False)
+    
+    if style_training=="True" and imagenet_training =="True":
+        print("******** Concat mini_imagenet and style-imagenet *******")
+        train_dataset = ConcatDataset([train_dataset, train_dataset_style])
+    elif style_training=="True" and imagenet_training != "True":
+        print("******* Use style_imagenet for trainining ********* ")
+        train_dataset = train_dataset_style
+    elif imagenet_training=="True" and style_training != "True":
+        print("******* Use mini_imagenet for trainining ********* ")
+        train_dataset = train_dataset
+        
 
     # sampler
     train_sampler = DistributedSampler(train_dataset) if distributed else None
@@ -308,15 +376,29 @@ def get_imagenet_dls(distributed, batch_size, workers):
 
     return train_loader, val_loader, train_sampler
 
-def get_cf_imagenet_dls(path, cf_ratio, len_dl_train, distributed, batch_size, workers):
+def get_cf_imagenet_dls(cf_training, cf_style_training, path_cf, path_sty_cf, cf_ratio, len_dl_train, distributed, batch_size, workers):
     # determine how many images to use, based on given ratio
     cf_batch_sz = int(cf_ratio * batch_size)
     n_data = cf_batch_sz * len_dl_train
 
-    # dataset
-    cf_train_dataset = ImagenetCounterfactual(path, train=True, n_data=n_data)
-    cf_val_dataset = ImagenetCounterfactual(path, train=False)
+    # cf dataset
+    cf_train_dataset = ImagenetCounterfactual(path_cf, train=True, n_data=n_data,mode='x_gen')
+    cf_val_dataset = ImagenetCounterfactual(path_cf, train=False,mode='x_gen')
+    
+    # path_sty_cf dataset
+    cf_sty_train_dataset = ImagenetCounterfactual(path_sty_cf, train=True, n_data=n_data,mode='style')
+    #cf_sty_val_dataset = ImagenetCounterfactual(path_sty_cf, train=False,mode='style')
 
+    if cf_training =="True" and cf_style_training =="True":
+        print("******** Concat cgn-imagenet and style-cgn-imagenet *******")
+        cf_train_dataset = ConcatDataset([cf_train_dataset, cf_sty_train_dataset])
+    elif cf_training=="True" and cf_style_training != "True":
+        print("******* Use cgn-imagenet for trainining ********* ")
+        cf_train_dataset = cf_train_dataset
+    elif cf_style_training=="True" and cf_training != "True":
+        print("******* Use style-cgn-imagenet for trainining ********* ")
+        cf_train_dataset = cf_sty_train_dataset
+    
     # sampler
     cf_train_sampler = DistributedSampler(cf_train_dataset) if distributed else None
     cf_val_sampler = DistributedSampler(cf_val_dataset, drop_last=True, shuffle=False) if distributed else None

@@ -156,7 +156,7 @@ def sample_classes(mode, classes=None):
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+    print("device is: ",device)
     # Load model
     cgn = CGN(
         batch_sz=args.batch_sz,

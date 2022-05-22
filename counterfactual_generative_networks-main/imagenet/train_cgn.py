@@ -175,7 +175,8 @@ def main(cfg):
     losses = (L_l1, L_perc, L_binary, L_mask, L_text, L_bg)
 
     # push to device and train
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device="cpu"
     cgn = cgn.to(device)
     losses = (l.to(device) for l in losses)
 

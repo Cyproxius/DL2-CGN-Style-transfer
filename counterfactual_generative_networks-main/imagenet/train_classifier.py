@@ -32,6 +32,11 @@ from imagenet.dataloader import (get_imagenet_dls, get_cf_imagenet_dls,
 from imagenet.models import InvariantEnsemble
 from utils import eval_bg_gap, eval_shape_bias
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -168,16 +173,17 @@ def main_worker(gpu, ngpus_per_node, args):
     
 
     ### dataloaders
-    train_loader, val_loader, train_sampler = get_imagenet_dls(args.distributed, args.batch_size, args.workers)
-    cf_train_loader, cf_val_loader, cf_train_sampler = get_cf_imagenet_dls(args.cf_data, args.cf_ratio, len(train_loader), args.distributed, args.batch_size, args.workers)
+    train_loader, val_loader, train_sampler = get_imagenet_dls(args.style_training, args.imagenet_training, args.distributed, args.batch_size, args.workers)
+    cf_train_loader, cf_val_loader, cf_train_sampler = get_cf_imagenet_dls(args.cf_training, args.cf_style_training ,args.cf_data,args.cf_style_data, args.cf_ratio, len(train_loader), args.distributed, args.batch_size, args.workers)
     dl_shape_bias = get_cue_conflict_dls(args.batch_size, args.workers)
-    dls_in9 = get_in9_dls(args.distributed, args.batch_size, args.workers, ['mixed_rand', 'mixed_same'])
+    #dls_in9 = get_in9_dls(args.distributed, args.batch_size, args.workers, ['mixed_rand', 'mixed_same'])
 
     
     # eval before training
     if not args.resume:
+        #Do not validate at first to save time
         metrics = validate(model, val_loader, cf_val_loader,
-                               dl_shape_bias, dls_in9, args)
+                               dl_shape_bias, args)
         if args.evaluate: return
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                                                     and args.rank % ngpus_per_node == 0):
@@ -194,7 +200,7 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler.set_epoch(epoch)
             cf_train_sampler.set_epoch(epoch)
 
-        cf_train_loader.dataset.resample()
+        #cf_train_loader.dataset.resample()
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
@@ -203,10 +209,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # evaluate on validation set
         metrics = validate(model, val_loader, cf_val_loader,
-                               dl_shape_bias, dls_in9, args)
+                               dl_shape_bias, args)
 
         # remember best acc@1 and save checkpoint
-        acc1_overall = metrics['acc1/0_overall']
+        acc1_overall = metrics['acc1/1_real']
         is_best = acc1_overall > best_acc1_overall
         best_acc1_overall = max(acc1_overall, best_acc1_overall)
 
@@ -242,7 +248,7 @@ def set_bn_train(module):
         module.train()
 
 
-def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, args):
+def train( train_loader, cf_train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -267,7 +273,7 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
     model.apply(set_bn_eval)
 
     end = time.time()
-    for i, (data, data_cf) in enumerate(zip(train_loader, cf_train_loader)):
+    for i, (data, data_cf) in enumerate(zip( train_loader, cf_train_loader)):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -278,18 +284,18 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
         # compute output
         out = model(data['ims'])
         loss = criterion(out['avg_preds'], data['labels'])
-
         # compute gradient
         loss.backward()
-
+        
+        
         # compute output for counterfactuals
         out_cf = model(data_cf['ims'])
         loss_cf = criterion(out_cf['shape_preds'], data_cf['shape_labels'])
         loss_cf += criterion(out_cf['texture_preds'], data_cf['texture_labels'])
         loss_cf += criterion(out_cf['bg_preds'], data_cf['bg_labels'])
-
         # compute gradient
-        loss_cf.backward()
+        if args.cf_training=="True" or args.cf_style_training=="True":
+            loss_cf.backward()
 
         # measure accuracy and record loss
         sz = len(data['ims'])
@@ -321,12 +327,14 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
             progress.display(i)
 
 
-def validate(model, val_loader, cf_val_loader, dl_shape_bias, dls_in9, args):
+def validate(model, val_loader, cf_val_loader, dl_shape_bias, args):
     real_accs = validate_imagenet(val_loader, model, args)
-    cf_accs = validate_counterfactual(cf_val_loader, model, args)
-    shapes_biases = validate_shape_bias(model, dl_shape_bias)
-    in_9_accs = validate_in_9(dls_in9, model)
-    val_res = {**real_accs, **cf_accs, **shapes_biases, **in_9_accs}
+    #cf_accs = validate_counterfactual(cf_val_loader, model, args)
+    #shapes_biases = validate_shape_bias(model, dl_shape_bias)
+    #in_9_accs = validate_in_9(dls_in9, model)
+    val_res= {**real_accs,}
+    #val_res = {**real_accs, **cf_accs, **shapes_biases, **in_9_accs}
+    #print("val_res is: ",val_res)
 
     # Sync up
     if args.multiprocessing_distributed:
@@ -349,6 +357,7 @@ def validate_imagenet(val_loader, model, args):
 
     # switch to evaluate mode
     model.eval()
+    print("**********validating imagenet*********")
 
     with torch.no_grad():
         end = time.time()
@@ -369,8 +378,8 @@ def validate_imagenet(val_loader, model, args):
             end = time.time()
 
             # logging
-            if i % args.print_freq == 0:
-                progress.display(i)
+            #if i % args.print_freq == 0:
+            #    progress.display(i)
 
     print(f'* Real: Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}')
 
@@ -392,6 +401,7 @@ def validate_counterfactual(val_loader, model, args):
 
     # switch to evaluate mode
     model.eval()
+    print("**********  validating counterfactual-imagenet  *********")
 
     with torch.no_grad():
         end = time.time()
@@ -419,8 +429,8 @@ def validate_counterfactual(val_loader, model, args):
             end = time.time()
 
             # logging
-            if i % args.print_freq == 0:
-                progress.display(i)
+            #if i % args.print_freq == 0:
+            #    progress.display(i)
 
     print(f'* Shape: Acc@1 {top1_shape.avg:.3f} Acc@5 {top5_shape.avg:.3f}')
     print(f'* Texture: Acc@1 {top1_texture.avg:.3f} Acc@5 {top5_texture.avg:.3f}')
@@ -436,7 +446,7 @@ def validate_counterfactual(val_loader, model, args):
 
 def validate_shape_bias(model, dl):
     model.eval()
-
+    print("********  validating shape_bias  *********")
     res = {}
     backbone = model.module.backbone
 
@@ -551,22 +561,22 @@ def accuracy(output, target, topk=(1,)):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-    parser.add_argument('--data', default='data/ImageNet', 
+    parser.add_argument('--data', default='data/imagenet_mini', 
                         help='path to dataset')
-    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
+    parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                         choices=model_names,
                         help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-    parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
-                        help='number of data loading workers (default: 4)')
+    parser.add_argument('-j', '--workers', default=3, type=int, metavar='N',
+                        help='number of data loading workers (default: 3)')
     parser.add_argument('--epochs', default=45, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                         help='manual epoch number (useful on restarts)')
     parser.add_argument('-b', '--batch-size', default=256, type=int,
                         metavar='N', help='mini-batch size (default: 256)')
-    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+    parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                         metavar='LR', help='initial learning rate', dest='lr')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M')
     parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
@@ -584,7 +594,20 @@ if __name__ == '__main__':
                         help='seed for initializing training. ')
     parser.add_argument('--gpu', default=None, type=int,
                         help='GPU id to use.')
-
+    parser.add_argument('--print_freq', default=1000, type=int, metavar='N',
+                        help='freq to log')
+                        
+    #Adding for different dataset
+    parser.add_argument('--style_training', default="False", type=str,
+                        help='If adding adding_style_data for training')
+    parser.add_argument('--imagenet_training', default="False", type=str,
+                        help='If adding imagenet for training')
+    parser.add_argument('--cf_training', default="False", type=str,
+                        help='If adding cf-imagenet for training')
+    parser.add_argument('--cf_style_training', default="False", type=str,
+                        help='If adding cf-imagenet for training')
+                        
+                        
     # distributed stuff
     parser.add_argument('--world-size', default=-1, type=int,
                         help='number of nodes for distributed training')
@@ -602,6 +625,8 @@ if __name__ == '__main__':
 
     # my arguments
     parser.add_argument('--cf_data', required=True, type=str,
+                        help='Path to the counterfactual dataset.')
+    parser.add_argument('--cf_style_data', required=True, type=str,
                         help='Path to the counterfactual dataset.')
     parser.add_argument('--name', default='', type=str,
                         help='name of the experiment')
