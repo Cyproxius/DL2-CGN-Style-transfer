@@ -1,0 +1,26 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_shared_course
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=train_classifier
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=3
+#SBATCH --time=9:30:00
+#SBATCH --mem=32000M
+#SBATCH --output=train_classifier%A.out
+
+
+module purge
+module load 2021
+module load Anaconda3/2021.05
+
+# Your job starts in the directory where you call sbatch
+cd $HOME/counterfactual_generative_networks
+# Activate your environment
+source activate cgn-gpu
+# Run your code
+
+srun python imagenet/train_classifier.py  -j 3 \
+--epochs 45 --pretrained --data imagenet/data/imagenet_mini --cf_data imagenet/data \
+--cf_style_data imagenet/data/cgn_style --style_training=True --imagenet_training=False \
+--cf_training=False --cf_style_training=True --name 5_style-img_style-cgn
