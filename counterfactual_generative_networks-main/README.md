@@ -1,4 +1,10 @@
-Training an invariant ImageNet classifier:
+# Setup
+
+Clone the repo and build the environment
+`conda env create -f environment-gpu.yml`
+`conda activate cgn`
+
+# ImageNet
 
 The main functions of this sub-repo are:
 
@@ -6,7 +12,17 @@ The main functions of this sub-repo are:
 - Generating data (samples, interpolations, or a whole dataset)
 - Training an invariant classifier ensemble
 
+### Generate Counterfactual Data ###
 
+To generate the counterfactuals for, e.g., double-colored MNIST, run
+
+```Shell
+python mnists/generate_data.py \
+--weight_path mnists/experiments/cgn_double_colored_MNIST/weights/ckp.pth \
+--dataset double_colored_MNIST --no_cfs 10 --dataset_size 100000
+```
+
+Make sure that you provide the right dataset together with the weights. You can adapt the weight-path to use your own weights. The command above generates ten counterfactuals per shape.
 
 ### Train the Invariant Classifier Ensemble ###
 
