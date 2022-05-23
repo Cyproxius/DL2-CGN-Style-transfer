@@ -26,13 +26,13 @@ def main(args):
                                       imagenet_training="True",
                                       distributed=args.distributed, 
                                       batch_size=args.batch_size, 
-                                      workers=args.num_workers)
+                                      workers=args.num_workers)[1]
     elif test_data = 'SIN':
         dataloader = get_imagenet_dls(style_training="True", 
                                       imagenet_training="False", 
                                       distributed=args.distributed, 
                                       batch_size=args.batch_size, 
-                                      workers=args.num_workers)
+                                      workers=args.num_workers)[1]
 
     results = tc.validate(model, dataloader, cf_val_loader=None, dl_shape_bias=None, args=args)
 
