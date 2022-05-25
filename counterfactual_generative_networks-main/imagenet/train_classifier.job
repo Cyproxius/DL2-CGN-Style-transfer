@@ -1,0 +1,26 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_shared_course
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=train_classifier
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=3
+#SBATCH --time=9:30:00
+#SBATCH --mem=32000M
+#SBATCH --output=train_classifier_44%A.out
+
+
+module purge
+module load 2021
+module load Anaconda3/2021.05
+
+# Your job starts in the directory where you call sbatch
+cd $HOME/counterfactual_generative_networks/imagenet
+# Activate your environment
+source activate cgn-gpu
+# Run your code
+#srun python -u mnists/generate_data.py \
+#--weight_path mnists/experiments/cgn_double_colored_MNIST/weights/ckp.pth \
+#--dataset double_colored_MNIST --no_cfs 10 --dataset_size 100000
+srun python -u train_classifier.py -a resnet50 -b 32 --epochs 45 --pretrained --workers 3 --print_freq 1000 \
+--data data/imagenet_mini --name train_IN --train_setup IN 

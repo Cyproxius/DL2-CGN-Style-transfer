@@ -88,6 +88,7 @@ class DistributedSampler(Sampler):
 
 def transform_labels(x):
     return torch.tensor(x).to(torch.int64)
+    
 
 # datasets
 
@@ -102,7 +103,6 @@ class ImagenetVanilla(Dataset) :
         # Transforms
         if train:
             ims_path = join(root, 'imagenet_mini', 'train')
-            print("ims_path for ImagenetVanilla:",ims_path)
             t_list = [transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip()]
         else:
             ims_path = join(root, 'imagenet_mini', 'val')
@@ -110,8 +110,8 @@ class ImagenetVanilla(Dataset) :
 
         t_list += [transforms.ToTensor(), normalize]
         self.T_ims = transforms.Compose(t_list)
-
         self.im_paths, self.labels = self.get_data(ims_path)
+
 
     def set_len(self, n):
         assert n < len(self), "Ratio is too large, not enough CF data available"
@@ -120,12 +120,15 @@ class ImagenetVanilla(Dataset) :
 
     @staticmethod
     def get_data(p):
+        #print("What is P?", p)
         ims, labels = [], []
         subdirs = sorted(glob(p + '/*'))
+        #print(subdirs)
         for i, sub in enumerate(subdirs):
             im = sorted(glob(sub + '/*'))
             l = np.ones(len(im))*i
             ims.append(im), labels.append(l)
+            #print("Do we reach this part?", im)
         return np.concatenate(ims), np.concatenate(labels)
 
     def __getitem__(self, idx):
@@ -167,12 +170,64 @@ class Imagenet_style(Dataset) :
 
     @staticmethod
     def get_data(p):
+        #print("What is P in error?", p)
+        ims, labels = [], []
+        subdirs = sorted(glob(p + '/*'))
+        #print("the subdirs are:", subdirs)
+        for i, sub in enumerate(subdirs):
+            im = sorted(glob(sub + '/*'))
+            l = np.ones(len(im))*i
+            #print("What are printing here?", im)
+            ims.append(im), labels.append(l)
+            #print("CHECKING WTF WE ARE TRYING TO PRINT", ims)
+        return np.concatenate(ims), np.concatenate(labels)
+
+    def __getitem__(self, idx):
+        ims = Image.open(self.im_paths[idx]).convert('RGB')
+        labels = self.labels[idx]
+        return {
+            'ims': self.T_ims(ims),
+            'labels': transform_labels(labels),
+        }
+
+    def __len__(self):
+        return len(self.im_paths)
+
+class Imagenet_style_test(Dataset) :
+
+    def __init__(self, train=True):
+        super(Imagenet_style_test, self).__init__()
+        root = join('.', 'imagenet', 'data')
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        # Transforms
+        if train:
+            ims_path = join(root, 'test_style_imagenet', 'train')
+            t_list = [transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip()]
+        else:
+            ims_path = join(root, 'test_style_imagenet', 'val')
+            t_list = [transforms.Resize(256), transforms.CenterCrop(224)]
+
+        t_list += [transforms.ToTensor(), normalize]
+        self.T_ims = transforms.Compose(t_list)
+
+        self.im_paths, self.labels = self.get_data(ims_path)
+
+    def set_len(self, n):
+        assert n < len(self), "Ratio is too large, not enough CF data available"
+        self.im_paths = self.im_paths[:n]
+        self.labels = self.labels[:n]
+
+    @staticmethod
+    def get_data(p):
         ims, labels = [], []
         subdirs = sorted(glob(p + '/*'))
         for i, sub in enumerate(subdirs):
             im = sorted(glob(sub + '/*'))
             l = np.ones(len(im))*i
             ims.append(im), labels.append(l)
+            #print("CHECKING WTF WE ARE TRYING TO PRINT", ims)
         return np.concatenate(ims), np.concatenate(labels)
 
     def __getitem__(self, idx):
@@ -198,18 +253,23 @@ class ImagenetCounterfactual(Dataset):
           "RUN_NAME_0000000_textures.jpg"
     '''
 
-    def __init__(self, ims_path, train=True, n_data=None, mode='x_gen'):
+    def __init__(self, ims_path, n_data=None, ratio=None, train=True, mode='x_gen'):
         super(ImagenetCounterfactual, self).__init__()
         print(f"Loading counterfactual data from {ims_path} for Train: "+ str(train)  )
         self.full_df = self.get_data(ims_path, train, mode)
 
         # get the actual dataframe that we use for sampling the dataset
-        if n_data is None: n_data = len(self.full_df)
-        self.n_data = n_data
-        if n_data > len(self.full_df):
-            mult = ceil(n_data/len(self.full_df))
+        if ratio is None: ratio = 1
+        num_data = int(ratio*len(self.full_df))
+        if n_data is not None:
+            num_data = n_data
+
+        self.num_data = num_data
+        if num_data > len(self.full_df):
+            mult = ceil(num_data/len(self.full_df))
             self.full_df = pd.concat(mult * [self.full_df])
         # setting df for the first time
+        # print('##################', self.num_data)
         self.resample()
         print(f"=> Current dataset sz: {len(self.df)}. Full dataset sz: {len(self.full_df)}")
 
@@ -226,10 +286,10 @@ class ImagenetCounterfactual(Dataset):
         
     def resample(self):
         ''' resample the current data set from the full dataset'''
-        self.df = self.full_df.sample(self.n_data)
+        self.df = self.full_df.sample(self.num_data)
         
     @staticmethod
-    def get_data(p, train , mode):
+    def get_data(p, train, mode):
         subdirs = glob(p + '/train*') if train else glob(p + '/val*')
         dfs = []
         if mode =="x_gen":
@@ -265,8 +325,7 @@ class ImagenetCounterfactual(Dataset):
 
     def __len__(self):
         return len(self.df)
-
-        
+       
 class CueConflict(Dataset):
     def __init__(self, t_list=[transforms.Resize(256),
                                transforms.CenterCrop(224),
@@ -342,6 +401,154 @@ class Imagenet9(object):
         test_loader = DataLoader(test_set, batch_size=batch_size, sampler=sampler,
                                  shuffle=False, num_workers=workers, pin_memory=True)
         return test_loader
+
+class DatasetVanilla(Dataset):
+    def __init__(self, ratio, style=False, train=True):
+        super(DatasetVanilla, self).__init__()
+        root = join('.', 'data')
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        # Transforms
+        if style:
+            ims_path = join(root, 'imagenet_style')
+        else:
+            ims_path = join(root, 'imagenet_mini')
+
+        if train:
+            ims_path = join(ims_path, 'train')
+            t_list = [transforms.RandomResizedCrop(224), transforms.RandomHorizontalFlip()]
+        else:
+            ims_path = join(ims_path, 'val')
+            t_list = [transforms.Resize(256), transforms.CenterCrop(224)]
+
+
+        t_list += [transforms.ToTensor(), normalize]
+        self.T_ims = transforms.Compose(t_list)
+        self.im_paths, self.labels = self.get_data(ims_path)
+        self.set_len(int(ratio*len(self)))
+
+
+    def set_len(self, n, rand=True):
+        assert n <= len(self), "Ratio is too large, not enough data available"
+        if rand:
+            assert len(self) == len(self.labels)
+            indices = np.random.permutation(len(self.im_paths))
+            self.im_paths = self.im_paths[indices]
+            self.labels = self.labels[indices]
+
+        self.im_paths = self.im_paths[:n]
+        self.labels = self.labels[:n]
+
+    @staticmethod
+    def get_data(p):
+        ims, labels = [], []
+        subdirs = sorted(glob(p + '/*'))
+        for i, sub in enumerate(subdirs):
+            im = sorted(glob(sub + '/*'))
+            l = np.ones(len(im))*i
+            ims.append(im), labels.append(l)
+
+        return np.concatenate(ims), np.concatenate(labels)
+
+    def __getitem__(self, idx):
+        ims = Image.open(self.im_paths[idx]).convert('RGB')
+        labels = self.labels[idx]
+        return {
+            'ims': self.T_ims(ims),
+            'labels': transform_labels(labels),
+        }
+
+    def __len__(self):
+        return len(self.im_paths)
+
+
+def get_dataloaders(config):
+
+    # Constants which denote the ratio num_samples_imagenet_mini/num_samples_dataset
+    IN_len = 34745
+    SIN_len = 40327
+    CGN_len = 18000#TODO change this to the real number
+    SCGN_len = 36000#TODO change this to the real number
+
+    SIN_ratio = IN_len / SIN_len
+    CGN_ratio = IN_len / CGN_len
+    SCGN_ratio = IN_len / SCGN_len
+
+    train_setup = config['train_setup']
+    batch_size = config['batch_size']
+    distributed = config['distributed']
+    workers = config['workers']
+
+    # HARDCODED PATH TO CGN AND STYLE CGN DATASETS
+    path_cgn = 'data/cgn'
+    path_scgn = 'data/cgn_style'
+
+    if train_setup == "IN":
+        train_dataset = DatasetVanilla(1, train=True, style=False)
+        val_dataset = DatasetVanilla(1, train=False, style=False)
+
+    elif train_setup == "IN-SIN":
+        fac = 0.5
+        train_dataset = ConcatDataset([DatasetVanilla(fac, train=True, style=False), 
+                                       DatasetVanilla(SIN_ratio*fac, train=True, style=True)]) 
+        val_dataset = ConcatDataset([DatasetVanilla(fac, train=False, style=False), 
+                                       DatasetVanilla(SIN_ratio*fac, train=False, style=True)]) 
+
+    elif train_setup == "IN-CGN":
+        fac = 0.5
+        train_dataset = ConcatDataset([DatasetVanilla(fac, train=True, style=False), 
+                                       ImagenetCounterfactual(path_cgn, ratio=CGN_ratio*fac, train=True, mode='x_gen')]) 
+        val_dataset = ConcatDataset([DatasetVanilla(fac, train=False, style=False), 
+                                       ImagenetCounterfactual(path_cgn, ratio=CGN_ratio*fac, train=False, mode='x_gen')]) 
+
+    elif train_setup == "IN-SCGN":
+        fac = 0.5
+        train_dataset = ConcatDataset([DatasetVanilla(fac, train=True, style=False), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=True, mode='style')]) 
+        val_dataset = ConcatDataset([DatasetVanilla(fac, train=False, style=False), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=False, mode='style')]) 
+
+    elif train_setup == "SIN":
+        train_dataset = DatasetVanilla(SIN_ratio, train=True, style=True)
+        val_dataset = DatasetVanilla(SIN_ratio, train=False, style=True)
+
+    elif train_setup == "SIN-CGN":
+        fac = 0.5
+        train_dataset = ConcatDataset([DatasetVanilla(SIN_ratio*fac, train=True, style=True), 
+                                       ImagenetCounterfactual(path_cgn, ratio=SCGN_ratio*fac, train=True, mode='x_gen')]) 
+        val_dataset = ConcatDataset([DatasetVanilla(SIN_ratio*fac, train=False, style=True), 
+                                       ImagenetCounterfactual(path_cgn, ratio=SCGN_ratio*fac, train=False, mode='x_gen')]) 
+
+    elif train_setup == "SIN-SCGN":
+        fac = 0.5
+        train_dataset = ConcatDataset([DatasetVanilla(SIN_ratio*fac, train=True, style=True), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=True, mode='style')]) 
+        val_dataset = ConcatDataset([DatasetVanilla(SIN_ratio*fac, train=False, style=True), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=False, mode='style')]) 
+
+    elif train_setup == "IN-SIN-CGN-SCGN":
+        fac = 0.25
+        train_dataset = ConcatDataset([DatasetVanilla(fac, train=True, style=False),
+                                       DatasetVanilla(SIN_ratio*fac, train=True, style=True), 
+                                       ImagenetCounterfactual(path_cgn, ratio=CGN_ratio*fac, train=True, mode='x_gen'), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=True, mode='style')])
+        val_dataset = ConcatDataset([DatasetVanilla(fac, train=False, style=False),
+                                       DatasetVanilla(SIN_ratio*fac, train=False, style=True), 
+                                       ImagenetCounterfactual(path_cgn, ratio=CGN_ratio*fac, train=False, mode='x_gen'), 
+                                       ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=False, mode='style')])
+
+    train_sampler = DistributedSampler(train_dataset) if distributed else None
+    val_sampler = DistributedSampler(val_dataset, drop_last=True, shuffle=False) if distributed else None
+
+    # dataloader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size,
+                              shuffle=(train_sampler is None), num_workers=workers,
+                              pin_memory=True, sampler=train_sampler)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                            num_workers=workers, pin_memory=True, sampler=val_sampler)
+
+    return train_loader, val_loader, train_sampler
 
 # dataloaders
 def get_imagenet_dls(style_training, imagenet_training, distributed, batch_size, workers):
