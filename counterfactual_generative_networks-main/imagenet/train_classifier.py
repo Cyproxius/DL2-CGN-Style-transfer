@@ -103,7 +103,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # save path
     if not args.resume:
         time_str = datetime.now().strftime("%Y_%m_%d_%H_%M")
-        model_path = join('.', 'experiments',
+        model_path = join('.', 'imagenet', 'experiments',
                             f'classifier_{time_str}_{args.name}')
         pathlib.Path(model_path).mkdir(parents=True, exist_ok=True)
         # dump current args in this folder
@@ -173,6 +173,9 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
     
 
+    ### dataloaders
+    # train_loader, val_loader, train_sampler = get_imagenet_dls(args.style_training, args.imagenet_training, args.distributed, args.batch_size, args.workers)
+
     # Define configuration based on command line arguments
     dl_config = {
         'train_setup': args.train_setup,
@@ -181,9 +184,11 @@ def main_worker(gpu, ngpus_per_node, args):
         'workers': args.workers
     }
     train_loader, val_loader, train_sampler = get_dataloaders(dl_config)
+    # cf_train_loader, cf_val_loader, cf_train_sampler = get_cf_imagenet_dls(args.cf_training, args.cf_style_training ,args.cf_data,args.cf_style_data, args.cf_ratio, len(train_loader), args.distributed, args.batch_size, args.workers)
     # Ugly but this way we modify the code in the least
     cf_train_loader, cf_val_loader, cf_train_sampler =None,None,None
     dl_shape_bias = get_cue_conflict_dls(args.batch_size, args.workers)
+    #dls_in9 = get_in9_dls(args.distributed, args.batch_size, args.workers, ['mixed_rand', 'mixed_same'])
 
     
     # eval before training
@@ -205,6 +210,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         if args.distributed:
             train_sampler.set_epoch(epoch)
+            # cf_train_sampler.set_epoch(epoch)
 
         #cf_train_loader.dataset.resample()
         adjust_learning_rate(optimizer, epoch, args)
@@ -279,12 +285,14 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
     model.apply(set_bn_eval)
 
     end = time.time()
+    # for i, (data, data_cf) in enumerate(zip( train_loader, cf_train_loader)):
     for i, data in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         if args.gpu is not None or torch.cuda.is_available():
             data = {k: v.cuda(args.gpu, non_blocking=True) for k, v in data.items()}
+            # data_cf = {k: v.cuda(args.gpu, non_blocking=True) for k, v in data_cf.items()}
 
         # compute output
         out = model(data['ims'])
@@ -292,6 +300,15 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
         # compute gradient
         loss.backward()
         
+        
+        # compute output for counterfactuals
+        # out_cf = model(data_cf['ims'])
+        # loss_cf = criterion(out_cf['shape_preds'], data_cf['shape_labels'])
+        # loss_cf += criterion(out_cf['texture_preds'], data_cf['texture_labels'])
+        # loss_cf += criterion(out_cf['bg_preds'], data_cf['bg_labels'])
+        # # compute gradient
+        # if args.cf_training=="True" or args.cf_style_training=="True":
+        #     loss_cf.backward()
 
         # measure accuracy and record loss
         sz = len(data['ims'])
@@ -300,6 +317,15 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
         # cf_losses.update(loss_cf.item(), data['ims'].size(0))
         top1_real.update(acc1[0], sz)
         top5_real.update(acc5[0], sz)
+        # acc1, acc5 = accuracy(out_cf['shape_preds'], data_cf['shape_labels'], topk=(1, 5))
+        # top1_shape.update(acc1[0], sz)
+        # top5_shape.update(acc5[0], sz)
+        # acc1, acc5 = accuracy(out_cf['texture_preds'], data_cf['texture_labels'], topk=(1, 5))
+        # top1_texture.update(acc1[0], sz)
+        # top5_texture.update(acc5[0], sz)
+        # acc1, acc5 = accuracy(out_cf['bg_preds'], data_cf['bg_labels'], topk=(1, 5))
+        # top1_bg.update(acc1[0], sz)
+        # top5_bg.update(acc5[0], sz)
 
         # Step
         optimizer.step()
@@ -316,7 +342,12 @@ def train(train_loader, cf_train_loader, model, criterion, optimizer, epoch, arg
 
 def validate(model, val_loader, cf_val_loader, dl_shape_bias, args):
     real_accs = validate_imagenet(val_loader, model, args)
+    #cf_accs = validate_counterfactual(cf_val_loader, model, args)
+    #shapes_biases = validate_shape_bias(model, dl_shape_bias)
+    #in_9_accs = validate_in_9(dls_in9, model)
     val_res= {**real_accs,}
+    #val_res = {**real_accs, **cf_accs, **shapes_biases, **in_9_accs}
+    #print("val_res is: ",val_res)
 
     # Sync up
     if args.multiprocessing_distributed:
@@ -358,6 +389,10 @@ def validate_imagenet(val_loader, model, args):
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
+
+            # logging
+            #if i % args.print_freq == 0:
+            #    progress.display(i)
 
     print(f'* Real: Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}')
 
@@ -620,7 +655,10 @@ if __name__ == '__main__':
                                   "IN-SCGN",
                                   "SIN-SCGN",
                                   "IN-SIN",
-                                  "IN-SIN-CGN-SCGN"], default="IN")
+                                  "IN-SIN-CGN-SCGN",
+                                  "half-IN",
+                                  "quart-IN",
+                                  "threequart-IN"], default="IN")
 
     args = parser.parse_args()
     print(args)
