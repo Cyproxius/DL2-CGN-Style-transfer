@@ -655,7 +655,10 @@ if __name__ == '__main__':
                                   "IN-SCGN",
                                   "SIN-SCGN",
                                   "IN-SIN",
-                                  "IN-SIN-CGN-SCGN"], default="IN")
+                                  "IN-SIN-CGN-SCGN",
+                                  "half-IN",
+                                  "quart-IN",
+                                  "threequart-IN"], default="IN")
 
     args = parser.parse_args()
     print(args)

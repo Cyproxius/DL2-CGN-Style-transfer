@@ -468,8 +468,8 @@ def get_dataloaders(config):
     # Constants which denote the ratio num_samples_imagenet_mini/num_samples_dataset
     IN_len = 34745
     SIN_len = 40327
-    CGN_len = 18000#TODO change this to the real number
-    SCGN_len = 36000#TODO change this to the real number
+    CGN_len = 18000
+    SCGN_len = 40000
 
     SIN_ratio = IN_len / SIN_len
     CGN_ratio = IN_len / CGN_len
@@ -537,6 +537,19 @@ def get_dataloaders(config):
                                        DatasetVanilla(SIN_ratio*fac, train=False, style=True), 
                                        ImagenetCounterfactual(path_cgn, ratio=CGN_ratio*fac, train=False, mode='x_gen'), 
                                        ImagenetCounterfactual(path_scgn, ratio=SCGN_ratio*fac, train=False, mode='style')])
+
+    elif train_setup == "half-IN":
+        train_dataset = DatasetVanilla(0.5, train=True, style=False)
+        val_dataset = DatasetVanilla(0.5, train=False, style=False)
+
+    elif train_setup == "quart-IN":
+        train_dataset = DatasetVanilla(0.25, train=True, style=False)
+        val_dataset = DatasetVanilla(0.25, train=False, style=False)
+
+    elif train_setup == "threequart-IN":
+        train_dataset = DatasetVanilla(0.75, train=True, style=False)
+        val_dataset = DatasetVanilla(0.75, train=False, style=False)
+
 
     train_sampler = DistributedSampler(train_dataset) if distributed else None
     val_sampler = DistributedSampler(val_dataset, drop_last=True, shuffle=False) if distributed else None
